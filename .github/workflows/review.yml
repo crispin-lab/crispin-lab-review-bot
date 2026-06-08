@@ -1,0 +1,99 @@
+name: Reusable AI Review
+
+on:
+  workflow_call:
+    secrets:
+      BOT_GITHUB_TOKEN:
+        required: true
+      OPENAI_API_KEY:
+        required: true
+    inputs:
+      openai_model:
+        required: false
+        type: string
+        default: gpt-4o-mini
+      openai_fallback_model:
+        required: false
+        type: string
+        default: gpt-4o-mini
+      max_files:
+        required: false
+        type: number
+        default: 20
+      max_findings:
+        required: false
+        type: number
+        default: 5
+      max_patch_bytes:
+        required: false
+        type: number
+        default: 120000
+      context_lines:
+        required: false
+        type: number
+        default: 80
+      inline_comments:
+        required: false
+        type: boolean
+        default: true
+      summary_comment:
+        required: false
+        type: boolean
+        default: true
+      bot_mentions:
+        required: false
+        type: string
+        default: ai-review-bot,review-bot,crispin-lab-review-bot
+      skip_forks:
+        required: false
+        type: boolean
+        default: true
+      fail_on_error:
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      checks: read
+    steps:
+      - name: Checkout reviewer
+        uses: actions/checkout@v4
+        with:
+          repository: crispin-lab/crispin-lab-review-bot
+          token: ${{ secrets.BOT_GITHUB_TOKEN }}
+          path: reviewer
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: reviewer/package-lock.json
+
+      - name: Install dependencies
+        working-directory: reviewer
+        run: npm ci
+
+      - name: Run AI review
+        working-directory: reviewer
+        run: npm run review
+        env:
+          BOT_GITHUB_TOKEN: ${{ secrets.BOT_GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ inputs.openai_model }}
+          OPENAI_FALLBACK_MODEL: ${{ inputs.openai_fallback_model }}
+          REVIEW_MAX_FILES: ${{ inputs.max_files }}
+          REVIEW_MAX_FINDINGS: ${{ inputs.max_findings }}
+          REVIEW_MAX_PATCH_BYTES: ${{ inputs.max_patch_bytes }}
+          REVIEW_CONTEXT_LINES: ${{ inputs.context_lines }}
+          REVIEW_INLINE_COMMENTS: ${{ inputs.inline_comments }}
+          REVIEW_SUMMARY_COMMENT: ${{ inputs.summary_comment }}
+          REVIEW_BOT_MENTIONS: ${{ inputs.bot_mentions }}
+          REVIEW_SKIP_FORKS: ${{ inputs.skip_forks }}
+          REVIEW_FAIL_ON_ERROR: ${{ inputs.fail_on_error }}
