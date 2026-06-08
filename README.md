@@ -157,3 +157,49 @@ npm test
 ```
 
 For a real PR run, GitHub Actions provides `GITHUB_EVENT_PATH` and `GITHUB_REPOSITORY`.
+
+## Local skill (`/pr-code-review`)
+
+This repo also ships a Claude Code skill at `.claude/skills/pr-code-review/` for driving an interactive PR review from your terminal. It complements the Actions-based bot — same review philosophy, but invoked on demand against any `crispin-lab` PR.
+
+### Install
+
+```bash
+git clone git@github.com:crispin-lab/crispin-lab-review-bot.git
+cd crispin-lab-review-bot
+
+mkdir -p ~/.claude/skills
+ln -s "$PWD/.claude/skills/pr-code-review" ~/.claude/skills/pr-code-review
+```
+
+`git pull` will then keep the skill in sync — no re-copy needed.
+
+### One-time bot setup
+
+Follow `.claude/skills/pr-code-review/SETUP.md` to log the dedicated bot GitHub account into an isolated `GH_CONFIG_DIR`. Required once per machine.
+
+You'll need:
+
+- The `gh` CLI installed and on `PATH`.
+- A fine-grained PAT from the bot account (or browser login) with the scopes listed in `SETUP.md`.
+- (Optional) The `codex` CLI installed and authenticated if you plan to use `--with-codex`.
+
+### Use
+
+```bash
+# Inside any Claude Code session
+/pr-code-review crispin-lab/crispin-lab-frontend#42
+/pr-code-review https://github.com/crispin-lab/crispin-lab-backend/pull/17 --dry-run
+/pr-code-review crispin-lab/crispin-lab-backend#42 --with-codex --focus correctness,security
+```
+
+See `.claude/skills/pr-code-review/SKILL.md` for the full flag reference and review pipeline.
+
+### Updating
+
+```bash
+cd crispin-lab-review-bot
+git pull
+```
+
+The symlink picks up changes immediately. No restart or reinstall needed.
