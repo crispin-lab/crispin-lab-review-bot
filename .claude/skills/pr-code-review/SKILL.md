@@ -412,20 +412,15 @@ Print the review URL (`html_url` from the POST response), the count of comments 
 
 Entered only when `--reply` is set. Steps 1–3 (parse / verify / fetch PR metadata) have already run. Conventions loading (step 5) still applies — load `.claude/CLAUDE.md` + `@rules/*.md` at the PR head SHA, same as review mode, since responses must respect them. Skip the big-PR guard, rate-limit guard, fingerprint dedup, diff review, codex critic, and the GitHub Review POST.
 
-### R1. Post start signal (👀)
+### R1. Reaction model (per-thread)
 
-Same as step 4.5's reaction logic, but no rate-limit check:
+Unlike review mode (which posts a single 👀/🎉 on the PR body), reply mode tracks reactions **per thread** on the user's most recent reply comment (`comments.nodes[-1].databaseId`). The PR conversation timeline then visibly tells the user which threads the bot is processing and which it has finished.
 
-```bash
-REACTION_ID=$(GH_CONFIG_DIR=~/.claude/skills/pr-code-review/bot-gh-config \
-  gh api --method POST \
-  -H "Accept: application/vnd.github+json" \
-  /repos/<owner>/<repo>/issues/<num>/reactions \
-  -f content=eyes \
-  --jq .id)
-```
+Initialize an empty map `THREAD_REACTIONS: {threadId → reactionId}`. The 👀 posts happen at the end of R3 (after filtering, so we only react on threads we'll actually process). The swap happens in R7.
 
-Skip if `--dry-run`.
+Do NOT post a PR-body 👀 in reply mode — that's review-mode's signal.
+
+Skip all reaction work if `--dry-run`.
 
 ### R2. Fetch all review threads (GraphQL)
 
@@ -473,6 +468,19 @@ Iterate `reviewThreads.nodes`. For each thread, keep it only if ALL hold:
 The third check is the **loop guard**: once the bot replies, the bot becomes the last commenter, so the thread won't re-trigger until the human replies again.
 
 If zero threads remain, post a no-op summary message (or just report "no threads need a response") and stop.
+
+**Post 👀 on each surviving thread** (skip if `--dry-run`). For each kept thread, react on its most recent user reply (`comments.nodes[-1].databaseId`) and record the reaction id in `THREAD_REACTIONS` (from R1):
+
+```bash
+RID=$(GH_CONFIG_DIR=~/.claude/skills/pr-code-review/bot-gh-config \
+  gh api --method POST \
+  -H "Accept: application/vnd.github+json" \
+  /repos/<owner>/<repo>/pulls/comments/<last_reply_databaseId>/reactions \
+  -f content=eyes \
+  --jq .id)
+```
+
+If the POST fails on one thread, log a warning and continue — never abort the whole run for a reaction failure.
 
 ### R4. Build per-thread context and classify intent
 
@@ -564,11 +572,31 @@ Order matters: post the reply FIRST, then resolve. If resolve runs before the re
 
 If a reply POST fails, log it and move on — never resolve a thread whose acknowledgement reply didn't post.
 
-### R7. Report + reaction swap
+### R7. Per-thread reaction swap + report
 
-- If `REACTION_ID` was captured in R1, swap 👀 → 🎉 the same way as step 10.
-- Print a summary: `<N>` replies posted, `<M>` threads resolved, `<K>` threads failed (with reasons), `<S>` threads skipped (no response needed).
-- Do NOT update the rate-limit state file — reply mode doesn't participate in that guard.
+For each thread in `THREAD_REACTIONS`, swap based on R6's outcome (skip entirely if `--dry-run`):
+
+- **Resolved** (`should_resolve == true` and the GraphQL `resolveReviewThread` succeeded): DELETE the 👀, then POST 🎉 on the same `comments.nodes[-1].databaseId`.
+- **Reply posted but not resolved** (disagreement / clarification / question, or `should_resolve == false`): DELETE the 👀, do NOT post 🎉. The thread stays open and 👀 is removed so it doesn't look in-progress.
+- **Reply POST failed**: leave 👀 in place so the unfinished state is visible. Do not delete and do not post 🎉.
+
+```bash
+# Delete 👀
+GH_CONFIG_DIR=~/.claude/skills/pr-code-review/bot-gh-config \
+  gh api --method DELETE \
+  /repos/<owner>/<repo>/pulls/comments/<last_reply_databaseId>/reactions/<RID>
+
+# Post 🎉 (resolved branch only)
+GH_CONFIG_DIR=~/.claude/skills/pr-code-review/bot-gh-config \
+  gh api --method POST \
+  -H "Accept: application/vnd.github+json" \
+  /repos/<owner>/<repo>/pulls/comments/<last_reply_databaseId>/reactions \
+  -f content=hooray
+```
+
+Print a summary: `<N>` replies posted, `<M>` threads resolved, `<K>` threads failed (with reasons), `<S>` threads skipped (no response needed). Include per-thread reaction status if any swap failed.
+
+Do NOT update the rate-limit state file — reply mode doesn't participate in that guard.
 
 ## Notes
 
