@@ -542,14 +542,15 @@ Otherwise, ask the user to confirm before any write.
 
 For each thread, in order:
 
-**Post the reply** (REST, bot's gh, threaded under the original comment):
+**Post the reply** (REST, bot's gh, threaded under the original comment).
+
+**Quoting guard**: ALWAYS serialize `reply_body` into a JSON payload file (`/tmp/pcr-reply-<num>-<thread>.json`) and POST with `--input <file>`, never `-f body="..."` inline — Korean text + backticks/`$`/embedded quotes silently corrupt shell escaping (observed on PR #52, comment had to be deleted + reposted).
 
 ```bash
 GH_CONFIG_DIR=~/.claude/skills/pr-code-review/bot-gh-config \
   gh api --method POST \
   /repos/<owner>/<repo>/pulls/<num>/comments \
-  -f body="<reply_body>" \
-  -F in_reply_to=<root_comment_databaseId>
+  --input /tmp/pcr-reply-<num>-<thread>.json
 ```
 
 (`root_comment_databaseId` = `comments.nodes[0].databaseId` from R2 — the REST numeric ID of the bot's original comment that started the thread.)
