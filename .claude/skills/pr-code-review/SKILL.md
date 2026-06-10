@@ -204,10 +204,29 @@ Payload for `POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews`:
 }
 ```
 
+**Newline guard**: NEVER inline-escape newlines as `\n` inside a body string and pass it through `jq --arg` / `-f body=...` — `--arg` treats the value as literal, so `\n` becomes `\\n` in the JSON file and GitHub stores the two characters `\` + `n`, rendering the summary as one giant line (observed on PR #53). Always write the body to a file with REAL LFs (heredoc, not `printf "...\n..."`) and pull it in with `jq --rawfile`. Same rule applies to any multi-line inline comment body.
+
 ```bash
+# Summary body in its OWN file with real newlines.
+cat > /tmp/pcr-summary-<num>.md <<'EOF'
+<summary text with actual line breaks>
+
+<!-- pcr:HASH -->
+EOF
+
+# Compose payload with --rawfile so LFs survive into the JSON string.
+jq -n \
+  --arg commit_id "<headRefOid>" \
+  --rawfile body /tmp/pcr-summary-<num>.md \
+  --argjson comments "$INLINE_COMMENTS_JSON" \
+  '{commit_id:$commit_id, body:$body, event:"COMMENT", comments:$comments}' \
+  > /tmp/pcr-review-<num>.json
+
 <BOT_GH> gh api --method POST /repos/<owner>/<repo>/pulls/<num>/reviews \
   --input /tmp/pcr-review-<num>.json
 ```
+
+`$INLINE_COMMENTS_JSON` is the inline-comments array built separately — when any inline body is multi-line, build it the same way (per-comment `.md` file + `jq --rawfile` + `jq -s` to assemble the array), not by inlining `\n` escapes.
 
 If GitHub rejects an inline comment (line not in diff hunks), retry once with that comment moved into the summary body as `<file>:<line> — <comment>`. Never drop silently.
 
@@ -332,7 +351,7 @@ Print digest:
 
 For each thread, in order:
 
-**Post the reply** (bot's gh, threaded under the original comment). **Quoting guard**: ALWAYS serialize `reply_body` to `/tmp/pcr-reply-<num>-<thread>.json` and post with `--input`. NEVER `-f body="..."` inline — Korean + backticks / `$` / quotes silently corrupt escaping (observed on PR #52: had to delete + repost).
+**Post the reply** (bot's gh, threaded under the original comment). **Quoting guard**: ALWAYS serialize `reply_body` to `/tmp/pcr-reply-<num>-<thread>.json` and post with `--input`. NEVER `-f body="..."` inline — Korean + backticks / `$` / quotes silently corrupt escaping (observed on PR #52: had to delete + repost). **Newline guard** (same as step 9): write `reply_body` to a `.md` file with real LFs (heredoc, not `\n` escapes) and assemble the JSON via `jq --rawfile`, otherwise GitHub renders it as one giant line (observed on PR #53).
 
 ```bash
 <BOT_GH> gh api --method POST \
