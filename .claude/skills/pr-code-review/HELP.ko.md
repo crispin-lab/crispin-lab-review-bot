@@ -34,8 +34,8 @@
 | 플래그 | 모드 | 설명 |
 |---|---|---|
 | `--help`, `-h` | 둘 다 | 이 도움말 출력 후 종료 |
-| `--dry-run` | 둘 다 | 게시 없이 결과만 `/tmp/pcr-*.md` 로 저장 |
-| `--yes`, `-y` | 둘 다 | 게시 직전 확인 프롬프트 스킵 (큰 PR / rate-limit 가드는 유지 — `--force` 필요) |
+| `--dry-run` | 둘 다 | 게시 없이 결과만 `/tmp/pcr-*.md` 로 저장. 👀 반응만 PR 에 남음. `--yes` 보다 우선 — 같은 대화에서 "게시" 라고 말하면 재리뷰 없이 바로 POST |
+| `--yes`, `-y` | 둘 다 | 게시 직전 확인 프롬프트 스킵 (큰 PR / rate-limit 가드는 유지 — `--force` 필요). `--dry-run` 과 같이 쓰면 무의미 |
 | `--reply` | 답글 | 답글 모드로 전환 (diff 리뷰 안 함) |
 | `--focus <cat>[,...]` | 리뷰 | 카테고리 한정. 가능: `correctness`, `security`, `conventions`, `reuse`, `perf`, `tests` |
 | `--with-codex` | 리뷰 | codex CLI 로 finding을 한 번 더 검증 (false-positive 제거) |

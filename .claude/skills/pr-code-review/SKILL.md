@@ -84,7 +84,7 @@ State file: `~/.claude/skills/pr-code-review/state/<owner>__<repo>__<num>.json` 
 
 **Refuse** if **all** hold: `last_head_sha == <current headRefOid>` AND `now - last_run_at < 10 min` AND no `--force`. On refusal print target / last run / elapsed / "use `--force` to override or wait <N> minutes". Stop. Different head SHA = always re-review.
 
-If not `--dry-run`, post 👀 on the PR and capture the reaction id (held for step 10):
+**Always post 👀** on the PR right here (including `--dry-run`) and capture the reaction id (held for step 10). 👀 is the "bot is looking at this PR" signal — it must precede the diff review (step 7), not show up right before the POST. dry-run still posts it because dry-run is the bot reading the PR; if the user then ends without posting, the 👀 stays as a "saw it, no comment" trace.
 
 ```bash
 REACTION_ID=$(<BOT_GH> gh api --method POST \
@@ -94,6 +94,8 @@ REACTION_ID=$(<BOT_GH> gh api --method POST \
 ```
 
 On 👀 failure (e.g. PR locked): warn and continue — review still proceeds.
+
+In the dry-run → post follow-up flow (see Notes), do NOT re-post 👀 — the prior dry-run already did, and 👀→🎉 swap in step 10 will reuse that reaction id.
 
 ### 5. Load conventions at the head SHA
 
@@ -138,7 +140,26 @@ Per file (after big-PR-guard filtering):
 - Each finding: `path`, `line` (new-file line number), `side: "RIGHT"`, `body` (1–3 sentences, actionable, quote the offending snippet). Cite the rule file/section on convention findings.
 - Compute fingerprint; skip if seen.
 
-Summary (3–6 sentences): scope, top risks, 1–2 themes, conventions loaded yes/no, # findings deduped.
+Summary uses these **EXACT** section headers, in this order. Headers are fixed strings — never rename, translate, or reorder. Body is free-form Korean prose (or English if the PR conversation is English). Omit a section entirely (header + body) only when it would be empty; never leave a header with an empty body.
+
+```
+## Scope
+<1 line: N files, +X/-Y. What the PR does.>
+
+## Risks
+- <bullet per finding-level risk; one line each. Omit section if zero findings.>
+
+## Themes
+- <1–2 bullets on cross-cutting patterns the reviewer noticed (good or bad).>
+
+## Conventions
+<one line: N rule files loaded from {local clone | gh API} @ <sha[:7]> | none loaded (404).>
+
+## Dedup
+<one line: N prior bot findings still apply, M new findings this run. Or: no prior findings.>
+```
+
+If `--with-codex` ran, append one line below `## Dedup`: `Codex critic: kept N / dropped M.` (or `parse failed, all findings kept`). Do NOT add a new section header for it.
 
 Guardrails:
 - **Fewer, higher-confidence** by default. <70% sure → drop (unless `--focus` says otherwise).
@@ -177,7 +198,7 @@ PROMPT
 
 (Drop `--skip-git-repo-check` if unsupported on the installed codex.)
 
-Apply verdicts: `keep:true` → keep; `keep:false` → drop and log reason; missing fingerprint or unparseable output → **keep** (fail-open, never lose findings to critic errors). Append to summary: `Codex critic: kept N / dropped M` or `Codex critic: parse failed, all findings kept`.
+Apply verdicts: `keep:true` → keep; `keep:false` → drop and log reason; missing fingerprint or unparseable output → **keep** (fail-open, never lose findings to critic errors). The codex line is appended to the summary under `## Dedup` per step 7's template.
 
 ### 8. Confirm before posting
 
@@ -189,7 +210,7 @@ Print:
 - Findings by category, dedup count, codex critic kept/dropped (if ran)
 - Summary preview + first 3 inline comments (then "... and N more")
 
-Ask for confirmation — unless `--yes` is set (then proceed directly to step 9). `--dry-run` → write full markdown to `/tmp/pcr-<repo>-<num>.md`, print path, stop (overrides `--yes`).
+Ask for confirmation — unless `--yes` is set (then proceed directly to step 9). `--dry-run` → write full markdown to `/tmp/pcr-<repo>-<num>.md`, print path, stop (overrides `--yes`). The 👀 from step 4.5 stays on the PR; if the user later says "post" in the same conversation, see the dry-run → post Notes for the shortcut.
 
 ### 9. Post the review (bot's gh)
 
@@ -420,6 +441,7 @@ Report: `<N>` replies posted, `<M>` resolved, `<K>` failed (with reasons), `<S>`
 
 ## Notes
 
+- **Dry-run → post follow-up**: after `--dry-run` finishes in the same conversation, if the user asks to post ("게시", "post", "올려", "그대로 게시" etc.) WITHOUT re-invoking `/pr-code-review`, treat it as a continuation of the same run. Reuse the prepared summary + inline comments from `/tmp/pcr-<repo>-<num>.md` verbatim — do NOT re-fetch the PR, re-load conventions, re-review the diff, or re-call codex. Resume at step 9 (post the review), then step 10 (state + 👀→🎉 swap; 👀 is already on the PR from step 4.5). If the head SHA changed since the dry-run, abort the shortcut and tell the user to re-run.
 - Bot PAT scopes: `Contents: Read` (`.claude/` files), `Issues: write` (👀/🎉), `Pull requests: R/W` (review + GraphQL). All set in `SETUP.md`.
 - `bot-gh-config/` is `700` — do not back up to shared storage.
 - Local clone path convention: `~/documents/personal/git/<repo-name>` (GitHub repo name verbatim).
