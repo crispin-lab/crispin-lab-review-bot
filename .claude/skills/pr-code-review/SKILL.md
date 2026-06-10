@@ -223,10 +223,31 @@ jq -n \
   --argjson comments "$INLINE_COMMENTS_JSON" \
   '{commit_id:$commit_id, body:$body, event:"COMMENT", comments:$comments}' \
   > /tmp/pcr-review-<num>.json
-
-<BOT_GH> gh api --method POST /repos/<owner>/<repo>/pulls/<num>/reviews \
-  --input /tmp/pcr-review-<num>.json
 ```
+
+**Response-capture guard**: Redirect the POST response to a file. NEVER `RESP=$(<BOT_GH> gh api ...)` + `echo "$RESP" | jq ...` — command substitution strips trailing LFs and downstream `jq` failures get conflated with POST failure. The `gh api` exit code is the ONLY source of truth for whether the POST landed; parse the response file separately, after.
+
+```bash
+<BOT_GH> gh api --method POST /repos/<owner>/<repo>/pulls/<num>/reviews \
+  --input /tmp/pcr-review-<num>.json \
+  > /tmp/pcr-review-resp-<num>.json
+GH_EXIT=$?
+
+# Parse ONLY after deciding success from $GH_EXIT. A jq error here means the
+# response is weird, not that the POST failed.
+if [ $GH_EXIT -eq 0 ]; then
+  jq -r '"id=\(.id)\nhtml_url=\(.html_url)"' /tmp/pcr-review-resp-<num>.json
+fi
+```
+
+**Idempotency guard (NO blind retry)**: If POST looks failed for ANY reason — non-zero `gh` exit, jq error on the response, malformed body — DO NOT re-POST the same payload until you've verified the prior POST didn't already land. GitHub's reviews API is non-idempotent and submitted reviews CANNOT be deleted (`pending` only, 422 on submitted), so a wrong retry leaves a permanent duplicate on the PR (observed on PR #66: jq parse error on the response was read as POST failure → blind retry → two identical reviews, unrecoverable). Before any retry:
+
+```bash
+<BOT_GH> gh api "repos/<owner>/<repo>/pulls/<num>/reviews" --paginate \
+  --jq '.[] | select(.user.login == "'$BOT_LOGIN'" and (.body | contains("pcr:<HASH>"))) | {id, html_url, submitted_at}'
+```
+
+If a row matches the current run's `pcr:HASH`, the prior POST succeeded — adopt that `review_id` and skip retry. Only retry when NO matching review exists.
 
 `$INLINE_COMMENTS_JSON` is the inline-comments array built separately — when any inline body is multi-line, build it the same way (per-comment `.md` file + `jq --rawfile` + `jq -s` to assemble the array), not by inlining `\n` escapes.
 
