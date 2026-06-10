@@ -35,9 +35,11 @@
 |---|---|---|
 | `--help`, `-h` | 둘 다 | 이 도움말 출력 후 종료 |
 | `--dry-run` | 둘 다 | 게시 없이 결과만 `/tmp/pcr-*.md` 로 저장 |
+| `--yes`, `-y` | 둘 다 | 게시 직전 확인 프롬프트 스킵 (큰 PR / rate-limit 가드는 유지 — `--force` 필요) |
 | `--reply` | 답글 | 답글 모드로 전환 (diff 리뷰 안 함) |
 | `--focus <cat>[,...]` | 리뷰 | 카테고리 한정. 가능: `correctness`, `security`, `conventions`, `reuse`, `perf`, `tests` |
 | `--with-codex` | 리뷰 | codex CLI 로 finding을 한 번 더 검증 (false-positive 제거) |
+| `--auto-reply` | 리뷰 | 리뷰 게시 후 자동으로 답글 모드까지 이어서 실행. `--yes` 와 조합하면 완전 무중단 |
 | `--force` | 리뷰 | 큰 PR 가드 + rate-limit 가드 우회 |
 
 ## 예시
@@ -57,6 +59,9 @@
 
 # 답글 처리 미리 보기
 /pr-code-review crispin-lab/crispin-lab-backend#42 --reply --dry-run
+
+# 리뷰 + 답글까지 한 번에, 확인 프롬프트 없이
+/pr-code-review crispin-lab/crispin-lab-backend#42 --auto-reply --yes
 ```
 
 ## 사전 셋팅

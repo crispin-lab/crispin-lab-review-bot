@@ -19,9 +19,11 @@ Two modes:
 
 Flags:
 - `--dry-run` — both modes. No posting; write plan to `/tmp/pcr-<repo>-<num>.md` (review) or `/tmp/pcr-replies-<repo>-<num>.md` (reply).
+- `--yes`, `-y` — both modes. Skip routine confirmation prompts (step 8 review preview, R5 reply digest). Big-PR guard (step 4) and rate-limit guard still apply — use `--force` to bypass those.
 - `--focus <cat>[,...]` — review only. Limit findings to: `correctness`, `security`, `conventions`, `reuse`, `perf`, `tests`.
 - `--force` — review only. Bypass big-PR + rate-limit guards.
 - `--with-codex` — review only. Codex CLI critic pass between review and post.
+- `--auto-reply` — review only. After step 10 (review posted), automatically chain into Reply mode (R1) against the same PR so existing user replies on prior bot threads are processed in the same run. Combine with `--yes` for fully non-interactive review→reply.
 - `--reply` — switch to reply mode (rate-limit guard does not apply).
 - `--help`, `-h` — print help and stop.
 
@@ -187,7 +189,7 @@ Print:
 - Findings by category, dedup count, codex critic kept/dropped (if ran)
 - Summary preview + first 3 inline comments (then "... and N more")
 
-Ask for confirmation. `--dry-run` → write full markdown to `/tmp/pcr-<repo>-<num>.md`, print path, stop.
+Ask for confirmation — unless `--yes` is set (then proceed directly to step 9). `--dry-run` → write full markdown to `/tmp/pcr-<repo>-<num>.md`, print path, stop (overrides `--yes`).
 
 ### 9. Post the review (bot's gh)
 
@@ -253,6 +255,8 @@ On post failure: leave 👀 in place (visible unfinished state).
 
 **Report**: review URL (`html_url`), # comments posted, # deduped, codex kept/dropped (if ran).
 
+**If `--auto-reply`**: do NOT stop. Jump straight to the Reply mode pipeline (R1) against the same PR. `headRefOid` and conventions stay loaded — no re-fetch. With `--yes`, R5 is also skipped, making the whole review→reply non-interactive.
+
 ## Reply mode pipeline
 
 Entered only with `--reply`. Steps 1–3 already ran. **Still load conventions (step 5)** — replies must respect them. Skip big-PR guard, rate-limit guard, fingerprint dedup, diff review, codex critic, GitHub Review POST.
@@ -308,7 +312,7 @@ Per-thread reaction failure → warn + continue (never abort the whole run for a
 Per thread, gather:
 - Original bot comment body (`comments.nodes[0].body`, strip `<!-- pcr:... -->`)
 - Full reply history (author + body, in order)
-- File at HEAD (cache by path): `gh api "repos/<owner>/<repo>/contents/<path>?ref=<headRefOid>" --jq '.content' | base64 -d`. 404 = deleted at HEAD (usually the user removed the offending code).
+- File at HEAD (cache by path): `gh api "repos/<owner>/<repo>/contents/<path>?ref=<headRefOid>" --jq '.content' | base64 -d`. **ALWAYS use `gh api` here** — `git show <sha>:<path>` / `git cat-file -p <sha>:<path>` from a worktree checkout silently return wrong content (e.g. commit message text instead of the file blob — observed on PR #53). 404 = deleted at HEAD (usually the user removed the offending code).
 - Thread's `path` / `line` / `originalLine`
 - Loaded `.claude/` conventions
 
@@ -345,7 +349,7 @@ Print digest:
 - Per-thread one-liner: `path:line — intent=<…> resolve=<true|false>`
 - First 3 reply bodies in full, then "... and N more"
 
-`--dry-run` → write full plan to `/tmp/pcr-replies-<repo>-<num>.md`, print path, stop. Otherwise ask to confirm before any write.
+`--dry-run` → write full plan to `/tmp/pcr-replies-<repo>-<num>.md`, print path, stop (overrides `--yes`). Otherwise ask to confirm before any write — unless `--yes` is set (then proceed directly to R6).
 
 ### R6. Post replies, then resolve
 
