@@ -25,9 +25,10 @@
 **답글 모드 (`--reply`)** — 이전 봇 리뷰 스레드의 답글에 응답 + 수정 확인 시 자동 resolve
 1. GraphQL 로 리뷰 스레드 전체 조회
 2. **봇이 시작했고 마지막 commenter가 봇이 아닌** 미해결 스레드만 처리 (루프 방지)
-3. 각 답글의 의도 분류: fixed / disagreement / clarification / agreement / question
-4. "수정함" 이라고 했고 HEAD 파일에서 실제 변경이 확인되면 → 확인 코멘트 + 스레드 resolve
-5. 그 외엔 적절한 답글만 게시
+3. 처리 대상 스레드의 사용자 마지막 답글에 👀 **즉시** 게시 (분류 LLM 호출 전, "보고 있다" 신호)
+4. 각 답글의 의도 분류: fixed / disagreement / clarification / agreement / question
+5. "수정함" 이라고 했고 HEAD 파일에서 실제 변경이 확인되면 → 확인 코멘트 + 스레드 resolve + 👀→🎉
+6. 그 외엔 적절한 답글만 게시 + 👀 제거
 
 ## 플래그
 
@@ -35,7 +36,7 @@
 |---|---|---|
 | `--help`, `-h` | 둘 다 | 이 도움말 출력 후 종료 |
 | `--dry-run` | 둘 다 | 게시 없이 결과만 `/tmp/pcr-*.md` 로 저장. 👀 반응만 PR 에 남음. `--yes` 보다 우선 — 같은 대화에서 "게시" 라고 말하면 재리뷰 없이 바로 POST |
-| `--yes`, `-y` | 둘 다 | 게시 직전 확인 프롬프트 스킵 (큰 PR / rate-limit 가드는 유지 — `--force` 필요). `--dry-run` 과 같이 쓰면 무의미 |
+| `--yes`, `-y` | 둘 다 | **모든** 확인 프롬프트 스킵 — 게시 미리보기(step 8) / 답글 digest(R5) / closed·merged·draft 경고(step 3) / "게시할까요?" 류 self-check 까지. 큰 PR / rate-limit 가드는 유지 (`--force` 필요). `--dry-run` 과 같이 쓰면 무의미 |
 | `--reply` | 답글 | 답글 모드로 전환 (diff 리뷰 안 함) |
 | `--focus <cat>[,...]` | 리뷰 | 카테고리 한정. 가능: `correctness`, `security`, `conventions`, `reuse`, `perf`, `tests` |
 | `--with-codex` | 리뷰 | codex CLI 로 finding을 한 번 더 검증 (false-positive 제거) |

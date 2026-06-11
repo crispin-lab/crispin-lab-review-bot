@@ -19,7 +19,7 @@ Two modes:
 
 Flags:
 - `--dry-run` — both modes. No posting; write plan to `/tmp/pcr-<repo>-<num>.md` (review) or `/tmp/pcr-replies-<repo>-<num>.md` (reply).
-- `--yes`, `-y` — both modes. Skip routine confirmation prompts (step 8 review preview, R5 reply digest). Big-PR guard (step 4) and rate-limit guard still apply — use `--force` to bypass those.
+- `--yes`, `-y` — both modes. Skip **ALL** routine confirmation prompts, including: step 3 closed/merged/draft warning, step 8 review preview, R5 reply digest, and any "should I proceed / post / continue?" self-check you might be tempted to ask before a write (review POST, reply POST, thread resolve, reaction post/delete). With `--yes`, the only allowed stops are hard guards: big-PR guard (step 4), rate-limit guard (step 4.5), missing/invalid target, bot-not-logged-in, GitHub API errors. Use `--force` to bypass the big-PR + rate-limit guards. `--dry-run` overrides `--yes` (dry-run still writes its plan file and stops at step 8 / R5).
 - `--focus <cat>[,...]` — review only. Limit findings to: `correctness`, `security`, `conventions`, `reuse`, `perf`, `tests`.
 - `--force` — review only. Bypass big-PR + rate-limit guards.
 - `--with-codex` — review only. Codex CLI critic pass between review and post.
@@ -64,7 +64,7 @@ gh pr view <num> --repo <owner>/<repo> --json number,title,body,headRefOid,baseR
 gh pr diff <num> --repo <owner>/<repo> --patch
 ```
 
-If `closed`/`merged`/`draft`, ask whether to continue.
+If `closed`/`merged`/`draft`, ask whether to continue — UNLESS `--yes` is set (then warn once in the report and continue).
 
 **Linked issues**: scan PR body for `(?:Fixes|Closes|Resolves|Refs)\s+#(\d+)` (case-insensitive). Cap at 5:
 
@@ -305,7 +305,9 @@ Entered only with `--reply`. Steps 1–3 already ran. **Still load conventions (
 
 ### R1. Reaction model
 
-Reply mode reacts **per thread** on `comments.nodes[-1].databaseId` (user's latest reply). Init empty `THREAD_REACTIONS: {threadId → reactionId}`. 👀 posts at end of R3 (only on threads we'll process); swap in R7. Do NOT post a PR-body 👀 — that's review mode's signal. Skip all reaction work if `--dry-run`.
+Reply mode reacts **per thread** on `comments.nodes[-1].databaseId` (user's latest reply). Init empty `THREAD_REACTIONS: {threadId → reactionId}`. **👀 posts immediately after filtering in R3 — BEFORE the R4 LLM classification call** — and is swapped/removed in R7. The point of 👀 is "bot started looking at this thread", so it must precede the slow classification step, not show up at the end. Do NOT post a PR-body 👀 — that's review mode's signal. Skip all reaction work if `--dry-run`.
+
+**Never prompt the user before posting 👀**. Reactions are status signals, not "writes that need confirmation" — they post unconditionally (even without `--yes`).
 
 ### R2. Fetch review threads (GraphQL, user's gh)
 
@@ -330,22 +332,24 @@ gh api graphql -F owner=<owner> -F repo=<repo> -F num=<num> -f query='
 
 Paginate via `after: endCursor`. Cap at 5 pages, warn if exceeded.
 
-### R3. Filter threads needing a response
+### R3. Filter threads + post 👀 (start signal)
 
-Keep a thread only if ALL hold:
+**Step A — Filter.** Keep a thread only if ALL hold:
 - `isResolved == false`
 - `comments.nodes[0].author.login == <BOT_LOGIN>` (bot started it)
 - `comments.nodes[-1].author.login != <BOT_LOGIN>` (someone else has the last word) — **loop guard**
 
 If zero threads remain, report "no threads need a response" and stop.
 
-**Post 👀 on each surviving thread's latest reply** (skip if `--dry-run`). Record in `THREAD_REACTIONS`:
+**Step B — Post 👀 immediately, BEFORE R4.** This is the very next action after filtering — no confirmation prompt, no LLM call, nothing else first. Skip only if `--dry-run`. For each surviving thread, POST 👀 on `comments.nodes[-1].databaseId` (the user's latest reply) and record `RID` in `THREAD_REACTIONS`:
 
 ```bash
 RID=$(<BOT_GH> gh api --method POST -H "Accept: application/vnd.github+json" \
   /repos/<owner>/<repo>/pulls/comments/<last_reply_databaseId>/reactions \
   -f content=eyes --jq .id)
 ```
+
+The 👀 must be visible on GitHub **before** R4's classification call lands, so the user sees "bot is processing" while waiting. Posting 👀 at R6/R7 instead would defeat the signal — at that point the work is already done.
 
 Per-thread reaction failure → warn + continue (never abort the whole run for a reaction).
 
