@@ -1,25 +1,19 @@
 ---
 name: pr-code-review
-description: Review a GitHub PR in the crispin-lab org and post inline + summary review comments using a dedicated bot GitHub account, or (with --reply) respond to replies on prior bot review threads and auto-resolve confirmed-fixed conversations. Loads the target repo's .claude/ conventions, dedups against prior bot comments, and posts as a single GitHub Review. Use when the user asks to review a PR by URL or owner/repo#number form, e.g. "/pr-code-review crispin-lab/crispin-lab-frontend#42" or "/pr-code-review https://github.com/crispin-lab/crispin-lab-backend/pull/17 --reply".
+description: Review a GitHub PR in the crispin-lab org and post inline + summary as one GitHub Review using a dedicated bot account. With `--reply`, respond to user replies on prior bot review threads and auto-resolve confirmed fixes. Loads the target repo's `.claude/` conventions and dedups against prior bot comments. Invoke for `owner/repo#NUMBER` or PR URLs (crispin-lab org).
 ---
 
 # pr-code-review
 
 Two modes:
-- **Review mode** (default) — review the diff and post a single GitHub Review with inline comments + summary as the bot.
-- **Reply mode** (`--reply`) — respond to replies on prior bot review threads; auto-resolve threads when the fix is confirmed at HEAD.
+- **Review mode** (default) — review the diff and post a single GitHub Review with inline + summary as the bot.
+- **Reply mode** (`--reply`) — respond to replies on prior bot review threads; auto-resolve when the fix is confirmed at HEAD.
 
-**Bot account isolation**: every bot-side `gh` call must use `GH_CONFIG_DIR=~/.claude/skills/pr-code-review/bot-gh-config`. Below this is shortened to `<BOT_GH>` — expand it in real commands. **Never** mutate the user's primary `gh` auth.
+**Bot account isolation**: every bot-side `gh` call MUST use `GH_CONFIG_DIR=~/.claude/skills/pr-code-review/bot-gh-config` (shortened to `<BOT_GH>` below). Never mutate the user's primary `gh` auth.
 
 ## Help short-circuit (do this FIRST)
 
-If the user's invocation contains `--help` or `-h` ANYWHERE in the args (with or without a target — e.g. `/pr-code-review --help`, `/pr-code-review crispin-lab/foo#1 --help`, `/pr-code-review -h`):
-
-1. Read `/Users/crispin/.claude/skills/pr-code-review/HELP.ko.md` with the Read tool.
-2. Output its **full contents verbatim** to the user as your reply. Do NOT summarize, paraphrase, translate, or wrap with extra text.
-3. Stop. Do NOT parse the target, do NOT verify bot setup, do NOT call any other tool.
-
-This precedes every other step in this skill — including target parsing and unknown-flag rejection. A missing target is fine when `--help` is present.
+If args contain `--help` / `-h` anywhere: Read `~/.claude/skills/pr-code-review/HELP.ko.md` and output its contents **verbatim**. No summary, no target parse, no other tool. Stop. Missing target is fine when `--help` is present.
 
 ## Args
 
@@ -29,24 +23,19 @@ This precedes every other step in this skill — including target parsing and un
 
 Flags:
 - `--dry-run` — both modes. No posting; write plan to `/tmp/pcr-<repo>-<num>.md` (review) or `/tmp/pcr-replies-<repo>-<num>.md` (reply).
-- `--yes`, `-y` — both modes. **Auto-answer EVERY interactive prompt with the default "continue" action.** This is unconditional: if the skill would otherwise stop and wait for any user input — short of a hard refusal — `--yes` skips that wait and proceeds. Covered prompts include (non-exhaustive list, treat as illustrative not exclusive): step 3 closed/merged/draft warning, step 4 big-PR guard ("review all" by default, NOT "skip to top 20"), step 8 review preview, R5 reply digest, and any "should I proceed / post / continue?" self-check you might be tempted to ask before a write (review POST, reply POST, thread resolve, reaction post/delete). The ONLY allowed stops under `--yes` are non-prompt hard refusals that simply abort: rate-limit guard (step 4.5 refuses without asking), missing/invalid target, bot-not-logged-in, GitHub API errors. Use `--force` to bypass the rate-limit guard. `--dry-run` overrides `--yes` (dry-run still writes its plan file and stops at step 8 / R5).
-  - Rule of thumb: if you find yourself typing "Want me to ...?" or "Continue?" with `--yes` set, you've broken the contract — just do it.
+- `--yes`, `-y` — both modes. **Auto-answer every interactive prompt with "continue"**: step 3 closed/merged/draft, step 4 big-PR (review all, never "skip"/"bail"), step 8 review preview, R5 reply digest, any pre-write self-check. Only non-prompt refusals stop the run: rate-limit (step 4.5), missing/invalid target, bot not logged in, GitHub API errors. `--force` to bypass rate-limit. `--dry-run` overrides `--yes` (still stops at step 8 / R5 to write the plan file). Rule of thumb: typing "Want me to ...?" / "Continue?" under `--yes` = broken contract.
 - `--focus <cat>[,...]` — review only. Limit findings to: `correctness`, `security`, `conventions`, `reuse`, `perf`, `tests`.
-- `--force` — review only. Bypass big-PR + rate-limit guards. (`--yes` alone already auto-continues past big-PR; use `--force` when you also need to override the rate-limit refusal.)
+- `--force` — review only. Bypass big-PR + rate-limit guards. (`--yes` already auto-continues big-PR; use `--force` for rate-limit override.)
 - `--with-codex` — review only. Codex CLI critic pass between review and post.
-- `--auto-reply` — review only. After step 10 (review posted), automatically chain into Reply mode (R1) against the same PR so existing user replies on prior bot threads are processed in the same run. Combine with `--yes` for fully non-interactive review→reply.
+- `--auto-reply` — review only. After step 10, chain into Reply mode (R1) on the same PR. Combine with `--yes` for fully non-interactive review→reply.
 - `--reply` — switch to reply mode (rate-limit guard does not apply).
 - `--help`, `-h` — print help and stop.
 
 Unknown flag → fail clearly. Missing/unparseable target → ask the user. `--reply` + review-only flags → warn (ignored) but continue.
 
-## Shared pipeline (steps 0–3)
+## Shared pipeline (steps 1–3)
 
-After step 3: `--reply` → jump to **Reply mode**, else continue with **Review mode**.
-
-### 0. Help short-circuit
-
-Handled at the top of this document under "Help short-circuit (do this FIRST)". If `--help` / `-h` is in the args, you should never reach this step.
+After step 3: `--reply` → jump to **Reply mode**, else **Review mode**.
 
 ### 1. Parse target + flags
 
@@ -71,9 +60,9 @@ gh pr view <num> --repo <owner>/<repo> --json number,title,body,headRefOid,baseR
 gh pr diff <num> --repo <owner>/<repo> --patch
 ```
 
-If `closed`/`merged`/`draft`, ask whether to continue — UNLESS `--yes` is set (then warn once in the report and continue).
+If `closed` / `merged` / `draft`: ask whether to continue — UNLESS `--yes` (then warn once and continue).
 
-**Linked issues**: scan PR body for `(?:Fixes|Closes|Resolves|Refs)\s+#(\d+)` (case-insensitive). Cap at 5:
+**Linked issues**: scan PR body for `(?:Fixes|Closes|Resolves|Refs)\s+#(\d+)` (case-insensitive), cap 5:
 
 ```bash
 gh issue view <n> --repo <owner>/<repo> --json title,body,labels
@@ -83,17 +72,15 @@ gh issue view <n> --repo <owner>/<repo> --json title,body,labels
 
 ### 4. Big-PR guard
 
-`total_changes = additions + deletions`. If `changedFiles > 50` OR `total_changes > 2000`: warn with numbers + largest files, ask continue / skip / bail. Skip = review only top 20 files by churn. `--force` skips this guard entirely (no warn). `--yes` auto-answers **"continue" (review all)** — print the warning to the report but do not wait for input; never default to "skip" or "bail" under `--yes`.
+`total_changes = additions + deletions`. If `changedFiles > 50` OR `total_changes > 2000`: warn (numbers + largest files) and ask continue / skip / bail. Skip = top 20 files by churn. `--force` skips guard entirely. `--yes` auto-answers **continue (review all)** — print warning to the report, do not wait, never default to skip/bail.
 
-### 4.5. Rate-limit guard + start signal
+### 4.5. Rate-limit guard + 👀 (start signal)
 
-State file: `~/.claude/skills/pr-code-review/state/<owner>__<repo>__<num>.json` with `{last_run_at, last_head_sha, last_review_id}`.
+State file: `~/.claude/skills/pr-code-review/state/<owner>__<repo>__<num>.json` = `{last_run_at, last_head_sha, last_review_id}`.
 
-**Refuse** if **all** hold: `last_head_sha == <current headRefOid>` AND `now - last_run_at < 10 min` AND no `--force`. On refusal print target / last run / elapsed / "use `--force` to override or wait <N> minutes". Stop. Different head SHA = always re-review.
+**Refuse** iff `last_head_sha == headRefOid` AND `now - last_run_at < 10 min` AND no `--force`. Print target / last run / elapsed / "use `--force` or wait <N>m". Different head SHA = always re-review.
 
-**Post 👀 immediately**, BEFORE step 5 (conventions load) and step 7 (diff review). This is the very next action after the rate-limit guard passes — no confirmation prompt, no LLM call, no other tool call first. Posts on every run including `--dry-run`. Capture the reaction id (held for step 10). The signal must reach GitHub **before** the slow diff-review work starts, so the user sees "bot is looking at this PR" while waiting. Posting 👀 only right before step 9 POST would defeat the signal — at that point the review is already written.
-
-**Never prompt the user before posting 👀**. Reactions are status signals, not "writes that need confirmation" — they post unconditionally (even without `--yes`).
+**Post 👀 immediately** after the rate-limit guard passes — BEFORE step 5 (conventions) and step 7 (review). No confirm prompt, no LLM call first. Runs on every `--dry-run` too. Capture `REACTION_ID` for step 10. Reactions are status signals — never gated by `--yes`, never prompted.
 
 ```bash
 REACTION_ID=$(<BOT_GH> gh api --method POST \
@@ -102,9 +89,7 @@ REACTION_ID=$(<BOT_GH> gh api --method POST \
   -f content=eyes --jq .id)
 ```
 
-On 👀 failure (e.g. PR locked): warn and continue — review still proceeds.
-
-In the dry-run → post follow-up flow (see Notes), do NOT re-post 👀 — the prior dry-run already did, and 👀→🎉 swap in step 10 will reuse that reaction id.
+On 👀 failure (PR locked etc.): warn + continue. In the dry-run → post follow-up flow (Notes), do NOT re-post 👀 — step 10's swap reuses the existing `REACTION_ID`.
 
 ### 5. Load conventions at the head SHA
 
@@ -132,24 +117,24 @@ gh api "repos/<owner>/<repo>/pulls/<num>/comments" --paginate --jq '.[] | select
 gh api "repos/<owner>/<repo>/pulls/<num>/reviews"  --paginate --jq '.[] | select(.user.login == "'$BOT_LOGIN'") | .body'
 ```
 
-Fingerprints are hidden HTML markers `<!-- pcr:HASH -->`. Per finding:
+Fingerprints = hidden HTML markers `<!-- pcr:HASH -->`. Per finding:
 
 ```
 hash = sha1(lower(path) + ":" + line + ":" + normalized_first_80_chars_of_body)[:12]
 ```
 
-(`normalized` = lowercased + whitespace collapsed.) Skip findings whose hash is seen. Append `<!-- pcr:HASH -->` to every new comment body. Summary uses its own hash from `"summary:<num>:<headRefOid>"`. Makes reruns idempotent across force-pushes.
+(`normalized` = lowercased + whitespace collapsed.) Skip findings whose hash is already seen. Append `<!-- pcr:HASH -->` to every new comment body. Summary fingerprint = `"summary:<num>:<headRefOid>"`. Reruns idempotent across force-pushes.
 
 ### 7. Review the diff
 
 Per file (after big-PR-guard filtering):
-- Issues on **added lines only** (`+`, excluding `+++` headers).
-- Categorize as `correctness`, `security`, `conventions`, `reuse`, `perf`, `tests`. Skip style/format unless `--focus conventions`.
+- Added lines only (`+`, excluding `+++` headers).
+- Categorize: `correctness`, `security`, `conventions`, `reuse`, `perf`, `tests`. Skip style/format unless `--focus conventions`.
 - Apply `--focus` filter.
-- Each finding: `path`, `line` (new-file line number), `side: "RIGHT"`, `body` (1–3 sentences, actionable, quote the offending snippet). Cite the rule file/section on convention findings.
+- Each finding: `path`, `line` (new-file line number), `side: "RIGHT"`, `body` (1–3 sentences, actionable, quote the offending snippet). Cite rule file/section on convention findings.
 - Compute fingerprint; skip if seen.
 
-Summary uses these **EXACT** section headers, in this order. Headers are fixed strings — never rename, translate, or reorder. Body is free-form Korean prose (or English if the PR conversation is English). Omit a section entirely (header + body) only when it would be empty; never leave a header with an empty body.
+Summary uses these **EXACT** section headers in this order — never rename, translate, or reorder. Body is Korean prose (English if the PR conversation is English). Omit a section entirely (header + body) when empty; never leave a header with empty body.
 
 ```
 ## Scope
@@ -159,7 +144,7 @@ Summary uses these **EXACT** section headers, in this order. Headers are fixed s
 - <bullet per finding-level risk; one line each. Omit section if zero findings.>
 
 ## Themes
-- <1–2 bullets on cross-cutting patterns the reviewer noticed (good or bad).>
+- <1–2 bullets on cross-cutting patterns the reviewer noticed.>
 
 ## Conventions
 <one line: N rule files loaded from {local clone | gh API} @ <sha[:7]> | none loaded (404).>
@@ -175,13 +160,13 @@ Guardrails:
 - Skip generated files, lockfiles, snapshots, build outputs.
 - No style/naming unless a rule file explicitly says so.
 
-If zero new findings, post summary review with `event: "COMMENT"`, empty `comments`, body saying so (e.g. "No new findings — N previous findings still apply.").
+Zero new findings → post summary review with `event: "COMMENT"`, empty `comments`, body saying so (e.g. "No new findings — N previous findings still apply.").
 
 ### 7.5. Codex critic pass (only `--with-codex`)
 
-If not set, skip entirely.
+Skip entirely if flag not set.
 
-Preflight: `command -v codex >/dev/null || { echo "codex CLI not found — install it or drop --with-codex"; exit 1; }`
+Preflight: `command -v codex >/dev/null || { echo "codex CLI not found"; exit 1; }`
 
 One batched call. Build `/tmp/pcr-critic-<num>-input.json`:
 
@@ -205,9 +190,9 @@ PROMPT
 )" < /tmp/pcr-critic-<num>-input.json > /tmp/pcr-critic-<num>-output.json
 ```
 
-(Drop `--skip-git-repo-check` if unsupported on the installed codex.)
+(Drop `--skip-git-repo-check` if unsupported.)
 
-Apply verdicts: `keep:true` → keep; `keep:false` → drop and log reason; missing fingerprint or unparseable output → **keep** (fail-open, never lose findings to critic errors). The codex line is appended to the summary under `## Dedup` per step 7's template.
+Apply: `keep:true` → keep; `keep:false` → drop + log reason; missing fingerprint or unparseable output → **keep** (fail-open). Codex line is appended per step 7's template.
 
 ### 8. Confirm before posting
 
@@ -216,14 +201,14 @@ Print:
 - Posting as: `<BOT_LOGIN>`
 - Conventions: `<N>` rule files (source: local clone | gh API | none)
 - Linked issues
-- Findings by category, dedup count, codex critic kept/dropped (if ran)
+- Findings by category, dedup count, codex kept/dropped (if ran)
 - Summary preview + first 3 inline comments (then "... and N more")
 
-Ask for confirmation — unless `--yes` is set (then proceed directly to step 9). `--dry-run` → write full markdown to `/tmp/pcr-<repo>-<num>.md`, print path, stop (overrides `--yes`). The 👀 from step 4.5 stays on the PR; if the user later says "post" in the same conversation, see the dry-run → post Notes for the shortcut.
+Ask for confirmation — UNLESS `--yes` (proceed to step 9). `--dry-run` → write full markdown to `/tmp/pcr-<repo>-<num>.md`, print path, stop (overrides `--yes`). The 👀 from step 4.5 stays on the PR; "post" in the same conversation = dry-run → post shortcut (Notes).
 
 ### 9. Post the review (bot's gh)
 
-`event` is **always** `COMMENT` — never `APPROVE`/`REQUEST_CHANGES`.
+`event` is **always** `COMMENT` — never `APPROVE` / `REQUEST_CHANGES`.
 
 Payload for `POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews`:
 
@@ -236,17 +221,15 @@ Payload for `POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews`:
 }
 ```
 
-**Newline guard**: NEVER inline-escape newlines as `\n` inside a body string and pass it through `jq --arg` / `-f body=...` — `--arg` treats the value as literal, so `\n` becomes `\\n` in the JSON file and GitHub stores the two characters `\` + `n`, rendering the summary as one giant line (observed on PR #53). Always write the body to a file with REAL LFs (heredoc, not `printf "...\n..."`) and pull it in with `jq --rawfile`. Same rule applies to any multi-line inline comment body.
+**Newline guard** (PR #53): never inline `\n` escapes in a body passed via `jq --arg` / `-f body=...` — `--arg` is literal so `\n` ships as `\\n` and GitHub renders one giant line. Write bodies to `.md` files with real LFs via heredoc and pull in with `jq --rawfile`. Same rule for multi-line inline comments.
 
 ```bash
-# Summary body in its OWN file with real newlines.
 cat > /tmp/pcr-summary-<num>.md <<'EOF'
 <summary text with actual line breaks>
 
 <!-- pcr:HASH -->
 EOF
 
-# Compose payload with --rawfile so LFs survive into the JSON string.
 jq -n \
   --arg commit_id "<headRefOid>" \
   --rawfile body /tmp/pcr-summary-<num>.md \
@@ -255,7 +238,7 @@ jq -n \
   > /tmp/pcr-review-<num>.json
 ```
 
-**Response-capture guard**: Redirect the POST response to a file. NEVER `RESP=$(<BOT_GH> gh api ...)` + `echo "$RESP" | jq ...` — command substitution strips trailing LFs and downstream `jq` failures get conflated with POST failure. The `gh api` exit code is the ONLY source of truth for whether the POST landed; parse the response file separately, after.
+**Response-capture guard**: redirect POST response to a file. Never `RESP=$(<BOT_GH> gh api ...)` + `jq <<< "$RESP"` — command substitution strips trailing LFs and a downstream jq error gets misread as POST failure. `gh api` exit code is the ONLY source of truth for POST success; parse the response file separately, after.
 
 ```bash
 <BOT_GH> gh api --method POST /repos/<owner>/<repo>/pulls/<num>/reviews \
@@ -263,25 +246,23 @@ jq -n \
   > /tmp/pcr-review-resp-<num>.json
 GH_EXIT=$?
 
-# Parse ONLY after deciding success from $GH_EXIT. A jq error here means the
-# response is weird, not that the POST failed.
 if [ $GH_EXIT -eq 0 ]; then
   jq -r '"id=\(.id)\nhtml_url=\(.html_url)"' /tmp/pcr-review-resp-<num>.json
 fi
 ```
 
-**Idempotency guard (NO blind retry)**: If POST looks failed for ANY reason — non-zero `gh` exit, jq error on the response, malformed body — DO NOT re-POST the same payload until you've verified the prior POST didn't already land. GitHub's reviews API is non-idempotent and submitted reviews CANNOT be deleted (`pending` only, 422 on submitted), so a wrong retry leaves a permanent duplicate on the PR (observed on PR #66: jq parse error on the response was read as POST failure → blind retry → two identical reviews, unrecoverable). Before any retry:
+**No blind retry** (PR #66): GitHub reviews API is non-idempotent and submitted reviews CANNOT be deleted (`pending` only, 422 on submitted). Before any retry, verify the prior POST didn't land:
 
 ```bash
 <BOT_GH> gh api "repos/<owner>/<repo>/pulls/<num>/reviews" --paginate \
   --jq '.[] | select(.user.login == "'$BOT_LOGIN'" and (.body | contains("pcr:<HASH>"))) | {id, html_url, submitted_at}'
 ```
 
-If a row matches the current run's `pcr:HASH`, the prior POST succeeded — adopt that `review_id` and skip retry. Only retry when NO matching review exists.
+If a row matches the current run's `pcr:HASH`, adopt that `review_id` — skip retry. Retry only when no match exists.
 
-`$INLINE_COMMENTS_JSON` is the inline-comments array built separately — when any inline body is multi-line, build it the same way (per-comment `.md` file + `jq --rawfile` + `jq -s` to assemble the array), not by inlining `\n` escapes.
+`$INLINE_COMMENTS_JSON` = inline-comments array built separately. Multi-line inline bodies follow the same heredoc + `--rawfile` + `jq -s` pattern — never inline `\n`.
 
-If GitHub rejects an inline comment (line not in diff hunks), retry once with that comment moved into the summary body as `<file>:<line> — <comment>`. Never drop silently.
+If GitHub rejects an inline comment (line not in diff hunks), retry once with the comment moved into the summary body as `<file>:<line> — <comment>`. Never drop silently.
 
 ### 10. Finalize state + 👀→🎉
 
@@ -302,11 +283,11 @@ On post success AND `REACTION_ID` captured: DELETE 👀 then POST 🎉.
   /repos/<owner>/<repo>/issues/<num>/reactions -f content=hooray
 ```
 
-On post failure: leave 👀 in place (visible unfinished state).
+On post failure: leave 👀 in place.
 
 **Report**: review URL (`html_url`), # comments posted, # deduped, codex kept/dropped (if ran).
 
-**If `--auto-reply`**: do NOT stop. Jump straight to the Reply mode pipeline (R1) against the same PR. `headRefOid` and conventions stay loaded — no re-fetch. With `--yes`, R5 is also skipped, making the whole review→reply non-interactive.
+**If `--auto-reply`**: jump straight to Reply mode (R1) on the same PR. `headRefOid` and conventions stay loaded — no re-fetch. With `--yes`, R5 is also skipped → fully non-interactive review→reply.
 
 ## Reply mode pipeline
 
@@ -314,9 +295,7 @@ Entered only with `--reply`. Steps 1–3 already ran. **Still load conventions (
 
 ### R1. Reaction model
 
-Reply mode reacts **per thread** on `comments.nodes[-1].databaseId` (user's latest reply). Init empty `THREAD_REACTIONS: {threadId → reactionId}`. **👀 posts immediately after filtering in R3 — BEFORE the R4 LLM classification call** — and is swapped/removed in R7. The point of 👀 is "bot started looking at this thread", so it must precede the slow classification step, not show up at the end. Do NOT post a PR-body 👀 — that's review mode's signal. Skip all reaction work if `--dry-run`.
-
-**Never prompt the user before posting 👀**. Reactions are status signals, not "writes that need confirmation" — they post unconditionally (even without `--yes`).
+Reacts **per thread** on `comments.nodes[-1].databaseId` (user's latest reply). Init `THREAD_REACTIONS: {threadId → reactionId} = {}`. 👀 posts at R3 step B (immediately after filter, BEFORE R4 LLM call); swapped/removed in R7. Skip all reaction work if `--dry-run`. Do NOT post a PR-body 👀 — that's review mode's signal. Reactions are status signals — unconditional, no `--yes` gate, no confirm prompt.
 
 ### R2. Fetch review threads (GraphQL, user's gh)
 
@@ -339,7 +318,7 @@ gh api graphql -F owner=<owner> -F repo=<repo> -F num=<num> -f query='
   }'
 ```
 
-Paginate via `after: endCursor`. Cap at 5 pages, warn if exceeded.
+Paginate via `after: endCursor`. Cap 5 pages, warn if exceeded.
 
 ### R3. Filter threads + post 👀 (start signal)
 
@@ -348,9 +327,9 @@ Paginate via `after: endCursor`. Cap at 5 pages, warn if exceeded.
 - `comments.nodes[0].author.login == <BOT_LOGIN>` (bot started it)
 - `comments.nodes[-1].author.login != <BOT_LOGIN>` (someone else has the last word) — **loop guard**
 
-If zero threads remain, report "no threads need a response" and stop.
+Zero remaining → report "no threads need a response" and stop.
 
-**Step B — Post 👀 immediately, BEFORE R4.** This is the very next action after filtering — no confirmation prompt, no LLM call, nothing else first. Skip only if `--dry-run`. For each surviving thread, POST 👀 on `comments.nodes[-1].databaseId` (the user's latest reply) and record `RID` in `THREAD_REACTIONS`:
+**Step B — Post 👀** on each surviving thread's `comments.nodes[-1].databaseId`, BEFORE R4. No prompt, no LLM call first. Skip if `--dry-run`. Record `RID` in `THREAD_REACTIONS`:
 
 ```bash
 RID=$(<BOT_GH> gh api --method POST -H "Accept: application/vnd.github+json" \
@@ -358,16 +337,14 @@ RID=$(<BOT_GH> gh api --method POST -H "Accept: application/vnd.github+json" \
   -f content=eyes --jq .id)
 ```
 
-The 👀 must be visible on GitHub **before** R4's classification call lands, so the user sees "bot is processing" while waiting. Posting 👀 at R6/R7 instead would defeat the signal — at that point the work is already done.
-
-Per-thread reaction failure → warn + continue (never abort the whole run for a reaction).
+Per-thread reaction failure → warn + continue (never abort the run for a reaction).
 
 ### R4. Build context and classify intent
 
 Per thread, gather:
 - Original bot comment body (`comments.nodes[0].body`, strip `<!-- pcr:... -->`)
 - Full reply history (author + body, in order)
-- File at HEAD (cache by path): `gh api "repos/<owner>/<repo>/contents/<path>?ref=<headRefOid>" --jq '.content' | base64 -d`. **ALWAYS use `gh api` here** — `git show <sha>:<path>` / `git cat-file -p <sha>:<path>` from a worktree checkout silently return wrong content (e.g. commit message text instead of the file blob — observed on PR #53). 404 = deleted at HEAD (usually the user removed the offending code).
+- File at HEAD (cache by path): `gh api "repos/<owner>/<repo>/contents/<path>?ref=<headRefOid>" --jq '.content' | base64 -d`. **ALWAYS use `gh api` here** — `git show <sha>:<path>` from a worktree silently returns wrong content (e.g. commit message text instead of file blob, PR #53). 404 = deleted at HEAD.
 - Thread's `path` / `line` / `originalLine`
 - Loaded `.claude/` conventions
 
@@ -378,17 +355,17 @@ Call Claude per thread (or batches ≤ 5). Force JSON schema:
   "threadId": "string (GraphQL node id, passed through unchanged)",
   "intent": "fixed | disagreement | clarification_request | agreement | question",
   "fix_confirmed": "boolean",
-  "reply_body": "string (1-3 sentences; match the language of the conversation — Korean if replies are Korean)",
+  "reply_body": "string (1-3 sentences; match conversation language — Korean if replies are Korean)",
   "should_resolve": "boolean"
 }
 ```
 
 Rules:
-- `fix_confirmed = true` ONLY when **both**: the user's reply claims/implies a fix (intent ∈ {`fixed`, `agreement`} with fix statement) AND HEAD file content (or its deletion) actually addresses the original finding. **Don't take the user's word alone.**
+- `fix_confirmed = true` ONLY when **both**: user reply claims/implies a fix (intent ∈ {`fixed`, `agreement`} with fix statement) AND HEAD content (or its deletion) actually addresses the original finding. **Don't take the user's word alone.**
 - `should_resolve = fix_confirmed`. Never resolve on disagreement or clarification.
 - `reply_body` by intent:
   - `fixed && fix_confirmed=true` → ack, e.g. "수정 확인했습니다. 반영해 주셔서 감사합니다."
-  - `fixed && fix_confirmed=false` → ask politely where the fix went in, e.g. "해당 위치엔 아직 변경이 안 보이는데, 혹시 다른 곳에서 처리하셨나요?"
+  - `fixed && fix_confirmed=false` → ask politely, e.g. "해당 위치엔 아직 변경이 안 보이는데, 혹시 다른 곳에서 처리하셨나요?"
   - `disagreement` → weigh against rule/diff. Valid reason → retract gracefully ("지적 감사합니다. 룰 X 기준으로 보면 현 코드가 맞네요. 의견 철회하겠습니다."). Still concerned → restate concern + rule citation in 1 sentence.
   - `clarification_request` / `question` → explain, cite the relevant rule file/section.
   - `agreement` (no fix) → brief ack, no resolve.
@@ -396,7 +373,7 @@ Rules:
 
 Fail-safe: unparseable response or missing `threadId` → **skip that thread**, log warning. Do NOT guess.
 
-### R5. Confirm with the user (always, including `--dry-run`)
+### R5. Confirm with the user
 
 Print digest:
 - Target / bot login
@@ -404,13 +381,13 @@ Print digest:
 - Per-thread one-liner: `path:line — intent=<…> resolve=<true|false>`
 - First 3 reply bodies in full, then "... and N more"
 
-`--dry-run` → write full plan to `/tmp/pcr-replies-<repo>-<num>.md`, print path, stop (overrides `--yes`). Otherwise ask to confirm before any write — unless `--yes` is set (then proceed directly to R6).
+`--dry-run` → write full plan to `/tmp/pcr-replies-<repo>-<num>.md`, print path, stop (overrides `--yes`). Otherwise ask to confirm — UNLESS `--yes` (proceed to R6).
 
 ### R6. Post replies, then resolve
 
 For each thread, in order:
 
-**Post the reply** (bot's gh, threaded under the original comment). **Quoting guard**: ALWAYS serialize `reply_body` to `/tmp/pcr-reply-<num>-<thread>.json` and post with `--input`. NEVER `-f body="..."` inline — Korean + backticks / `$` / quotes silently corrupt escaping (observed on PR #52: had to delete + repost). **Newline guard** (same as step 9): write `reply_body` to a `.md` file with real LFs (heredoc, not `\n` escapes) and assemble the JSON via `jq --rawfile`, otherwise GitHub renders it as one giant line (observed on PR #53).
+**Post the reply** (bot's gh, threaded under root). **Quoting + newline guards** (PR #52, #53): serialize `reply_body` via heredoc to a `.md` file + `jq --rawfile` to `/tmp/pcr-reply-<num>-<thread>.json`, post with `--input`. Never `-f body="..."` inline (Korean + backticks/`$`/quotes silently corrupt escaping). Never inline `\n` escapes.
 
 ```bash
 <BOT_GH> gh api --method POST \
@@ -431,13 +408,13 @@ For each thread, in order:
 
 (`thread.id` = GraphQL node ID from R2, NOT a databaseId.)
 
-**Order matters**: reply FIRST, then resolve. If a reply POST fails, log and move on; NEVER resolve a thread whose acknowledgement didn't post.
+**Order matters**: reply FIRST, then resolve. If reply POST fails, log + move on; NEVER resolve a thread whose acknowledgement didn't post.
 
 ### R7. Per-thread reaction swap + report
 
 Per thread in `THREAD_REACTIONS` (skip if `--dry-run`), branch on R6 outcome:
 - **Resolved** (`should_resolve` AND resolve succeeded): DELETE 👀 + POST 🎉.
-- **Reply posted, not resolved** (disagreement / clarification / question): DELETE 👀, no 🎉. Thread stays open; 👀 removed so it doesn't look in-progress.
+- **Reply posted, not resolved** (disagreement / clarification / question): DELETE 👀, no 🎉.
 - **Reply POST failed**: leave 👀, no 🎉.
 
 ```bash
@@ -448,16 +425,16 @@ Per thread in `THREAD_REACTIONS` (skip if `--dry-run`), branch on R6 outcome:
   /repos/<owner>/<repo>/pulls/comments/<last_reply_databaseId>/reactions -f content=hooray
 ```
 
-Report: `<N>` replies posted, `<M>` resolved, `<K>` failed (with reasons), `<S>` skipped. Include per-thread reaction status on swap failures.
+Report: `<N>` replies posted, `<M>` resolved, `<K>` failed (with reasons), `<S>` skipped. Per-thread reaction status on swap failures.
 
 **Do NOT update the rate-limit state file** — reply mode doesn't participate.
 
 ## Notes
 
-- **Dry-run → post follow-up**: after `--dry-run` finishes in the same conversation, if the user asks to post ("게시", "post", "올려", "그대로 게시" etc.) WITHOUT re-invoking `/pr-code-review`, treat it as a continuation of the same run. Reuse the prepared summary + inline comments from `/tmp/pcr-<repo>-<num>.md` verbatim — do NOT re-fetch the PR, re-load conventions, re-review the diff, or re-call codex. Resume at step 9 (post the review), then step 10 (state + 👀→🎉 swap; 👀 is already on the PR from step 4.5). If the head SHA changed since the dry-run, abort the shortcut and tell the user to re-run.
-- Bot PAT scopes: `Contents: Read` (`.claude/` files), `Issues: write` (👀/🎉), `Pull requests: R/W` (review + GraphQL). All set in `SETUP.md`.
+- **Dry-run → post follow-up**: after `--dry-run` in the same conversation, "게시" / "post" / "올려" without re-invoking `/pr-code-review` continues the same run. Reuse `/tmp/pcr-<repo>-<num>.md` verbatim — no re-fetch, no re-load, no re-codex. Resume at step 9, then step 10 (👀 from step 4.5 stays for the 👀→🎉 swap). If head SHA changed since dry-run, abort and tell the user to re-run.
+- Bot PAT scopes: `Contents: Read` (`.claude/`), `Issues: write` (👀/🎉), `Pull requests: R/W` (review + GraphQL). See `SETUP.md`.
 - `bot-gh-config/` is `700` — do not back up to shared storage.
-- Local clone path convention: `~/documents/personal/git/<repo-name>` (GitHub repo name verbatim).
-- Rate-limit state: per-PR-per-head-SHA. Force-push (new SHA) bypasses; `--force` overrides everything.
-- Loop guard relies on "last commenter ≠ bot". Renaming the bot mid-flight temporarily breaks it; `<!-- pcr:reply -->` is a secondary safety net.
-- `--with-codex` needs `codex` on `PATH` + valid login (`codex login` or `OPENAI_API_KEY`). Runs `--sandbox read-only` — cannot mutate the tree.
+- Local clone path: `~/documents/personal/git/<repo-name>` (GitHub repo name verbatim).
+- Rate-limit state is per-PR-per-head-SHA. Force-push (new SHA) bypasses; `--force` overrides.
+- Loop guard relies on "last commenter ≠ bot". `<!-- pcr:reply -->` is a secondary safety net.
+- `--with-codex` needs `codex` on `PATH` + valid login (`codex login` or `OPENAI_API_KEY`). Runs `--sandbox read-only`.
