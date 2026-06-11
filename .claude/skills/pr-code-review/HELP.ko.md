@@ -36,12 +36,12 @@
 |---|---|---|
 | `--help`, `-h` | 둘 다 | 이 도움말 출력 후 종료 |
 | `--dry-run` | 둘 다 | 게시 없이 결과만 `/tmp/pcr-*.md` 로 저장. 👀 반응만 PR 에 남음. `--yes` 보다 우선 — 같은 대화에서 "게시" 라고 말하면 재리뷰 없이 바로 POST |
-| `--yes`, `-y` | 둘 다 | **모든** 확인 프롬프트 스킵 — 게시 미리보기(step 8) / 답글 digest(R5) / closed·merged·draft 경고(step 3) / "게시할까요?" 류 self-check 까지. 큰 PR / rate-limit 가드는 유지 (`--force` 필요). `--dry-run` 과 같이 쓰면 무의미 |
+| `--yes`, `-y` | 둘 다 | **모든** 확인 프롬프트를 자동으로 "continue" 로 응답. 게시 미리보기(step 8) / 답글 digest(R5) / closed·merged·draft 경고(step 3) / **큰 PR 가드(step 4 — 전체 리뷰로 진행)** / "게시할까요?" 류 self-check 모두 포함. 멈추는 건 묻지 않고 그냥 거절하는 케이스 (rate-limit, target 파싱 실패, 봇 미로그인, GitHub API 에러) 뿐. rate-limit 도 우회하려면 `--force`. `--dry-run` 과 같이 쓰면 무의미 |
 | `--reply` | 답글 | 답글 모드로 전환 (diff 리뷰 안 함) |
 | `--focus <cat>[,...]` | 리뷰 | 카테고리 한정. 가능: `correctness`, `security`, `conventions`, `reuse`, `perf`, `tests` |
 | `--with-codex` | 리뷰 | codex CLI 로 finding을 한 번 더 검증 (false-positive 제거) |
 | `--auto-reply` | 리뷰 | 리뷰 게시 후 자동으로 답글 모드까지 이어서 실행. `--yes` 와 조합하면 완전 무중단 |
-| `--force` | 리뷰 | 큰 PR 가드 + rate-limit 가드 우회 |
+| `--force` | 리뷰 | 큰 PR 가드 + rate-limit 가드 모두 우회. `--yes` 만으로도 큰 PR 가드는 이미 자동 "continue" 라, 보통은 rate-limit 강제 우회용 |
 
 ## 예시
 

@@ -29,9 +29,10 @@ This precedes every other step in this skill — including target parsing and un
 
 Flags:
 - `--dry-run` — both modes. No posting; write plan to `/tmp/pcr-<repo>-<num>.md` (review) or `/tmp/pcr-replies-<repo>-<num>.md` (reply).
-- `--yes`, `-y` — both modes. Skip **ALL** routine confirmation prompts, including: step 3 closed/merged/draft warning, step 8 review preview, R5 reply digest, and any "should I proceed / post / continue?" self-check you might be tempted to ask before a write (review POST, reply POST, thread resolve, reaction post/delete). With `--yes`, the only allowed stops are hard guards: big-PR guard (step 4), rate-limit guard (step 4.5), missing/invalid target, bot-not-logged-in, GitHub API errors. Use `--force` to bypass the big-PR + rate-limit guards. `--dry-run` overrides `--yes` (dry-run still writes its plan file and stops at step 8 / R5).
+- `--yes`, `-y` — both modes. **Auto-answer EVERY interactive prompt with the default "continue" action.** This is unconditional: if the skill would otherwise stop and wait for any user input — short of a hard refusal — `--yes` skips that wait and proceeds. Covered prompts include (non-exhaustive list, treat as illustrative not exclusive): step 3 closed/merged/draft warning, step 4 big-PR guard ("review all" by default, NOT "skip to top 20"), step 8 review preview, R5 reply digest, and any "should I proceed / post / continue?" self-check you might be tempted to ask before a write (review POST, reply POST, thread resolve, reaction post/delete). The ONLY allowed stops under `--yes` are non-prompt hard refusals that simply abort: rate-limit guard (step 4.5 refuses without asking), missing/invalid target, bot-not-logged-in, GitHub API errors. Use `--force` to bypass the rate-limit guard. `--dry-run` overrides `--yes` (dry-run still writes its plan file and stops at step 8 / R5).
+  - Rule of thumb: if you find yourself typing "Want me to ...?" or "Continue?" with `--yes` set, you've broken the contract — just do it.
 - `--focus <cat>[,...]` — review only. Limit findings to: `correctness`, `security`, `conventions`, `reuse`, `perf`, `tests`.
-- `--force` — review only. Bypass big-PR + rate-limit guards.
+- `--force` — review only. Bypass big-PR + rate-limit guards. (`--yes` alone already auto-continues past big-PR; use `--force` when you also need to override the rate-limit refusal.)
 - `--with-codex` — review only. Codex CLI critic pass between review and post.
 - `--auto-reply` — review only. After step 10 (review posted), automatically chain into Reply mode (R1) against the same PR so existing user replies on prior bot threads are processed in the same run. Combine with `--yes` for fully non-interactive review→reply.
 - `--reply` — switch to reply mode (rate-limit guard does not apply).
@@ -82,7 +83,7 @@ gh issue view <n> --repo <owner>/<repo> --json title,body,labels
 
 ### 4. Big-PR guard
 
-`total_changes = additions + deletions`. If `changedFiles > 50` OR `total_changes > 2000`: warn with numbers + largest files, ask continue / skip / bail. Skip = review only top 20 files by churn. `--force` skips this guard.
+`total_changes = additions + deletions`. If `changedFiles > 50` OR `total_changes > 2000`: warn with numbers + largest files, ask continue / skip / bail. Skip = review only top 20 files by churn. `--force` skips this guard entirely (no warn). `--yes` auto-answers **"continue" (review all)** — print the warning to the report but do not wait for input; never default to "skip" or "bail" under `--yes`.
 
 ### 4.5. Rate-limit guard + start signal
 
