@@ -11,6 +11,16 @@ Two modes:
 
 **Bot account isolation**: every bot-side `gh` call must use `GH_CONFIG_DIR=~/.claude/skills/pr-code-review/bot-gh-config`. Below this is shortened to `<BOT_GH>` — expand it in real commands. **Never** mutate the user's primary `gh` auth.
 
+## Help short-circuit (do this FIRST)
+
+If the user's invocation contains `--help` or `-h` ANYWHERE in the args (with or without a target — e.g. `/pr-code-review --help`, `/pr-code-review crispin-lab/foo#1 --help`, `/pr-code-review -h`):
+
+1. Read `/Users/crispin/.claude/skills/pr-code-review/HELP.ko.md` with the Read tool.
+2. Output its **full contents verbatim** to the user as your reply. Do NOT summarize, paraphrase, translate, or wrap with extra text.
+3. Stop. Do NOT parse the target, do NOT verify bot setup, do NOT call any other tool.
+
+This precedes every other step in this skill — including target parsing and unknown-flag rejection. A missing target is fine when `--help` is present.
+
 ## Args
 
 `/pr-code-review <target> [flags]`
@@ -35,11 +45,7 @@ After step 3: `--reply` → jump to **Reply mode**, else continue with **Review 
 
 ### 0. Help short-circuit
 
-If args contain `--help` or `-h`, print `HELP.ko.md` and stop. Runs before everything — no API calls, no bot setup needed:
-
-```bash
-cat ~/.claude/skills/pr-code-review/HELP.ko.md
-```
+Handled at the top of this document under "Help short-circuit (do this FIRST)". If `--help` / `-h` is in the args, you should never reach this step.
 
 ### 1. Parse target + flags
 
@@ -84,7 +90,9 @@ State file: `~/.claude/skills/pr-code-review/state/<owner>__<repo>__<num>.json` 
 
 **Refuse** if **all** hold: `last_head_sha == <current headRefOid>` AND `now - last_run_at < 10 min` AND no `--force`. On refusal print target / last run / elapsed / "use `--force` to override or wait <N> minutes". Stop. Different head SHA = always re-review.
 
-**Always post 👀** on the PR right here (including `--dry-run`) and capture the reaction id (held for step 10). 👀 is the "bot is looking at this PR" signal — it must precede the diff review (step 7), not show up right before the POST. dry-run still posts it because dry-run is the bot reading the PR; if the user then ends without posting, the 👀 stays as a "saw it, no comment" trace.
+**Post 👀 immediately**, BEFORE step 5 (conventions load) and step 7 (diff review). This is the very next action after the rate-limit guard passes — no confirmation prompt, no LLM call, no other tool call first. Posts on every run including `--dry-run`. Capture the reaction id (held for step 10). The signal must reach GitHub **before** the slow diff-review work starts, so the user sees "bot is looking at this PR" while waiting. Posting 👀 only right before step 9 POST would defeat the signal — at that point the review is already written.
+
+**Never prompt the user before posting 👀**. Reactions are status signals, not "writes that need confirmation" — they post unconditionally (even without `--yes`).
 
 ```bash
 REACTION_ID=$(<BOT_GH> gh api --method POST \
