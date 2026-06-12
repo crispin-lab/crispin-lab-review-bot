@@ -23,7 +23,7 @@ If args contain `--help` / `-h` anywhere: Read `~/.claude/skills/pr-code-review/
 
 Flags:
 - `--dry-run` — both modes. No posting; write plan to `/tmp/pcr-<repo>-<num>.md` (review) or `/tmp/pcr-replies-<repo>-<num>.md` (reply).
-- `--yes`, `-y` — both modes. **Auto-answer every interactive prompt with "continue"**: step 3 closed/merged/draft, step 4 big-PR (review all, never "skip"/"bail"), step 8 review preview, R5 reply digest, any pre-write self-check. Only non-prompt refusals stop the run: rate-limit (step 4.5), missing/invalid target, bot not logged in, GitHub API errors. `--force` to bypass rate-limit. `--dry-run` overrides `--yes` (still stops at step 8 / R5 to write the plan file). Rule of thumb: typing "Want me to ...?" / "Continue?" under `--yes` = broken contract.
+- `--yes`, `-y` — both modes. **Auto-answer every interactive prompt with "continue"**: step 3 closed/merged/draft, step 4 big-PR (review all, never "skip"/"bail"), step 8 review preview, step 8 critic-shutout override (auto-includes all critic-dropped findings — safer than silently posting empty when critic rejected real findings), R5 reply digest, any pre-write self-check. Only non-prompt refusals stop the run: rate-limit (step 4.5), missing/invalid target, bot not logged in, GitHub API errors. `--force` to bypass rate-limit. `--dry-run` overrides `--yes` (still stops at step 8 / R5 to write the plan file). Rule of thumb: typing "Want me to ...?" / "Continue?" under `--yes` = broken contract.
 - `--focus <cat>[,...]` — review only. Limit findings to: `correctness`, `security`, `conventions`, `reuse`, `perf`, `tests`.
 - `--force` — review only. Bypass big-PR + rate-limit guards. (`--yes` already auto-continues big-PR; use `--force` for rate-limit override.)
 - `--with-codex` — review only. Codex CLI critic pass between review and post.
@@ -153,14 +153,23 @@ Summary uses these **EXACT** section headers in this order — never rename, tra
 <one line: N prior bot findings still apply, M new findings this run. Or: no prior findings.>
 ```
 
-If `--with-codex` ran, append one line below `## Dedup`: `Codex critic: kept N / dropped M.` (or `parse failed, all findings kept`). Do NOT add a new section header for it.
+If `--with-codex` ran, append below `## Dedup`: `Codex critic: kept N / dropped M.` (or `parse failed, all findings kept`), then for each drop one indented line `  - <fingerprint[:8]> path:line — <reason, ≤80 chars>`. Do NOT add a new section header for it.
 
 Guardrails:
 - **Fewer, higher-confidence** by default. <70% sure → drop (unless `--focus` says otherwise).
 - Skip generated files, lockfiles, snapshots, build outputs.
 - No style/naming unless a rule file explicitly says so.
 
-Zero new findings → post summary review with `event: "COMMENT"`, empty `comments`, body saying so (e.g. "No new findings — N previous findings still apply.").
+Zero new findings (after step 7.4 sweep) → post summary review with `event: "COMMENT"`, empty `comments`, body saying so (e.g. "No new findings — N previous findings still apply.").
+
+### 7.4. Multi-axis sweep (mechanical, never skip)
+
+After step 7 per-file pass — before critic. 4 yes/no checks on the diff as a whole; any "no" → add finding (fingerprint + dedup per step 7). Runs even when step 7 finds zero. Findings from sweep feed step 7.5 critic and the summary like any other.
+
+1. **Fallback symmetry** — for each changed function with ≥2 callers, does its parse-fail / exception-swallow fallback have the same safety sign at every caller? (Same `parseOrEmpty` returning empty → deny-safe at read but silent corruption at write = raise.)
+2. **Irreversible op** — `DROP COLUMN` / `DELETE` / `TRUNCATE` / forward-only migration / one-way data deletion: is recovery-path absence raised, **regardless of author intent**? Intent ≠ reversibility — flag the irreversibility axis separately even when the deletion itself is intended.
+3. **PR-stated invariant** — does the PR body assert an explicit invariant (deny-by-default, single-source-of-truth, "X is no longer trusted", etc.)? Is **every** changed file consistent with it? Partial violations are not speculative.
+4. **Guard side-effect completeness** — new production guard added (early-return, idempotency skip, etc.)? Does the spec assert `verify(never())` on **every** IO the guard skips, not just the first one? Partial pinning leaves regressions unguarded.
 
 ### 7.5. Codex critic pass (only `--with-codex`)
 
@@ -185,7 +194,7 @@ Invoke (read-only sandbox, JSON-only output):
 
 ```bash
 codex exec --sandbox read-only --skip-git-repo-check "$(cat <<'PROMPT'
-You are a code-review critic. Read JSON on stdin. For each finding, decide if it is a real, actionable issue given the diff and conventions. Be conservative: reject speculative findings, findings outside the diff scope, and findings contradicted by the conventions or PR context. Output ONLY {"verdicts":[{"fingerprint":string,"keep":boolean,"reason":string}]}. No prose, no fences.
+You are a code-review critic. Read JSON on stdin. For each finding, decide if it is a real, actionable issue given the diff and conventions. Be conservative: reject speculative findings, findings outside the diff scope, and findings contradicted by the conventions or PR context. Exception: if the PR body asserts an explicit invariant (deny-by-default, single-source-of-truth, irreversibility concern, etc.), do NOT drop a finding that points at a partial violation of that invariant on grounds of unproven exploitability — invariant-consistency is not speculation. Output ONLY {"verdicts":[{"fingerprint":string,"keep":boolean,"reason":string}]}. No prose, no fences.
 PROMPT
 )" < /tmp/pcr-critic-<num>-input.json > /tmp/pcr-critic-<num>-output.json
 ```
@@ -205,6 +214,8 @@ Print:
 - Summary preview + first 3 inline comments (then "... and N more")
 
 Ask for confirmation — UNLESS `--yes` (proceed to step 9). `--dry-run` → write full markdown to `/tmp/pcr-<repo>-<num>.md`, print path, stop (overrides `--yes`). The 👀 from step 4.5 stays on the PR; "post" in the same conversation = dry-run → post shortcut (Notes).
+
+**Critic-shutout override** (`--with-codex` only): if `kept == 0` AND `dropped >= 1`, surface the drop reasons (already in Dedup) explicitly before confirm. Interactive → ask "Critic rejected all N findings. Pick: [y]es include all / [N]o post empty / [s]elect subset". Under `--yes` → auto-include all dropped findings (safer than silently posting empty when critic rejected real findings); note the override in the final report.
 
 ### 9. Post the review (bot's gh)
 
